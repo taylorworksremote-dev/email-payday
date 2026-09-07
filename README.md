@@ -1,6 +1,6 @@
-# email-payday-scan
+# fdcpa-inbox-scan
 
-A Claude Code / Claude skill that scans an email inbox (Gmail and/or iCloud Mail — Inbox and Spam/Junk) for debt-collection and payment-demand language, restricts results to a configurable lookback window (2 years by default), and flags any matching email that arrived outside 8am-9pm **in your own local time zone** as a **potential FDCPA time-of-day violation**. Each match gets an embedded screenshot of the actual email, so the report can be handed straight to an attorney.
+A Claude Code / Claude skill that scans an email inbox (Gmail and/or iCloud Mail — Inbox and Spam/Junk) for debt-collection and payment-demand language, restricts results to a configurable lookback window (2 years by default), and reports the matching emails that arrived outside 8am-9pm **in your own local time zone** as **potential FDCPA time-of-day violations**. Each one gets an embedded screenshot of the actual email, so the report can be handed straight to an attorney. Emails that match the keywords but arrived during normal hours are not violations and never show up in the report at all.
 
 This is a general-purpose personal screening tool. It has no connection to any specific person, company, or dispute — it just looks for a fixed set of keywords in your own mail and tells you when they showed up outside normal hours. It produces a screening pass, not a legal conclusion.
 
@@ -8,14 +8,14 @@ This is a general-purpose personal screening tool. It has no connection to any s
 
 1. Searches the configured mailbox(es) for these terms (case-insensitive): `payment due`, `late payment`, `payment reminder`, `due`, `make a payment`, `past due`, `pay now`.
 2. Restricts matches to the last 2 years (or, in incremental/scheduled mode, since the last run).
-3. Converts every timestamp to **your actual local timezone** (you specify it — this is never assumed to be Eastern) and flags anything that arrived between 9pm and 8am as a "Potential FDCPA Claim."
-4. Renders a screenshot of each matched email (using its real HTML content when available) via headless Chromium, so the report carries visual evidence, not just extracted text.
-5. Builds a two-tab report — "All Matches" and "Potential FDCPA Claims" — as an `.xlsx` file with the flagged rows highlighted and a screenshot embedded next to each row.
-6. In a Claude environment with a Google Drive connector, uploads that report as a native Google Sheet and hands back the link. Without Drive, it just leaves the local CSV/XLSX files in place.
+3. Converts every timestamp to **your actual local timezone** (you specify it — this is never assumed to be Eastern) and keeps only the messages that arrived between 9pm and 8am — everything else is dropped and never appears in the output.
+4. Renders a screenshot of each remaining match (using its real HTML content when available) via headless Chromium, so the report carries visual evidence, not just extracted text.
+5. Builds a single "Potential FDCPA Claims" sheet as an `.xlsx` file, with separate Date (`MM/DD/YYYY`, no day-of-week) and Time columns, the real mailbox address that was scanned, and a screenshot embedded next to each row.
+6. In a Claude environment with a Google Drive connector, uploads that report as a native Google Sheet and hands back the link. Without Drive, it just leaves the local CSV/XLSX files in place. If nothing qualifies as a potential violation, no Sheet is created at all — you're just told the scan came back clean.
 
 ## Why the keyword list is broad
 
-Terms like bare `due` and `pay now` will also match ordinary subscription receipts and bills — that's intentional. This tool favors recall over precision: better to hand over a slightly noisy list to sort through than to silently miss a real collection email because the filter was too clever.
+Terms like bare `due` and `pay now` will also match ordinary subscription receipts and bills — that's intentional at the matching stage, so a real collection email never slips through because the filter was too clever. But that noise never reaches you: only messages that both match a keyword *and* arrived outside 8am-9pm local make it into the final report.
 
 ## Requirements
 
@@ -48,7 +48,7 @@ python scripts/classify_and_report.py --input gmail_raw.json icloud_raw.json --o
 
 Other useful flags on `classify_and_report.py`:
 - `--tz` (required) — your IANA timezone, e.g. `America/New_York`, `America/Chicago`, `America/Denver`, `America/Los_Angeles`, `America/Phoenix`. This is never assumed — pick the zone for where you actually live.
-- `--screenshots {all,flagged,none}` (default `all`) — which rows get an embedded screenshot. `flagged` only screenshots the potential-FDCPA rows (faster on a large result set); `none` skips screenshots entirely.
+- `--screenshots {all,none}` (default `all`) — every row in the report is already a potential violation, so `all` screenshots all of them; `none` skips screenshots entirely (faster, and keeps the file small if you're uploading a lot of hits to Drive).
 - `--years` (default `2.0`) — lookback window.
 
 This produces `fdcpa_scan.csv` and `fdcpa_scan.xlsx`. Gmail collection itself (`gmail_raw.json`) is driven by Claude through the Gmail connector per the steps in `SKILL.md` — there's no standalone Gmail script here because it relies on Claude's own connector tools rather than direct API calls.
