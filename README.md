@@ -1,4 +1,4 @@
-# fdcpa-inbox-scan
+# email-payday-scan
 
 A Claude Code / Claude skill that scans an email inbox (Gmail and/or iCloud Mail — Inbox and Spam/Junk) for debt-collection and payment-demand language, restricts results to a configurable lookback window (2 years by default), and reports the matching emails that arrived outside 8am-9pm **in your own local time zone** as **potential FDCPA time-of-day violations**. Each one gets an embedded screenshot of the actual email, so the report can be handed straight to an attorney. Emails that match the keywords but arrived during normal hours are not violations and never show up in the report at all.
 
