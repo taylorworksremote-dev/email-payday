@@ -117,7 +117,7 @@ def main():
             body_html = get_html_body(msg)[:100000]
             sender_name, sender_email = parseaddr(decode_mime_words(msg.get("From", "")))
             records.append({
-                "account": "icloud",
+                "account": args.email,
                 "folder": "inbox" if box.upper() == "INBOX" else "spam_or_junk",
                 "message_id": msg.get("Message-ID") or f"{box}-{uid.decode()}",
                 "thread_id": None,
