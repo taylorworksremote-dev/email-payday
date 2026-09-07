@@ -1,4 +1,4 @@
-import argparse, json, sys, re
+import argparse, json, sys, re, html as _html
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -86,11 +86,60 @@ def load_records(paths):
     return records
 
 
+def render_email_screenshot(subject, sender_name, sender_email, date_local_str, body_html, body_text, out_path):
+    """Render a visual copy of the email (header block + body) to a PNG using a headless
+    browser, so the report can carry actual evidence of the message rather than just text --
+    useful when the sheet is going to be handed to an attorney. Uses the real HTML body when
+    the collector captured one; otherwise falls back to a formatted view of the plain text.
+    Returns out_path on success, or None if Playwright isn't installed or rendering fails
+    (the rest of the report still gets built either way -- this is best-effort)."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None
+
+    if body_html and body_html.strip():
+        body_section = body_html
+    else:
+        body_section = f"<pre style=\"white-space:pre-wrap;font-family:inherit;margin:0;\">{_html.escape(body_text or '')}</pre>"
+
+    page_html = f"""<!doctype html>
+<html><head><meta charset="utf-8"></head>
+<body style="margin:0;background:#f2f2f2;">
+  <div style="max-width:760px;margin:0 auto;padding:20px;background:#fff;
+              font-family:-apple-system,'Segoe UI',Arial,sans-serif;">
+    <div style="font-size:16px;font-weight:600;margin-bottom:10px;color:#111;">
+      {_html.escape(subject) or "(no subject)"}
+    </div>
+    <div style="font-size:13px;color:#444;margin-bottom:2px;">
+      <b>From:</b> {_html.escape(sender_name or "")} &lt;{_html.escape(sender_email or "")}&gt;
+    </div>
+    <div style="font-size:13px;color:#444;margin-bottom:14px;">
+      <b>Date:</b> {_html.escape(date_local_str or "")}
+    </div>
+    <hr style="border:none;border-top:1px solid #eee;margin-bottom:14px;">
+    <div style="font-size:14px;line-height:1.5;color:#222;">{body_section}</div>
+  </div>
+</body></html>"""
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 800, "height": 100})
+            page.set_content(page_html, wait_until="networkidle", timeout=15000)
+            page.screenshot(path=str(out_path), full_page=True)
+            browser.close()
+        return out_path
+    except Exception as e:
+        print(f"  Screenshot failed for '{subject}': {e}", file=sys.stderr)
+        return None
+
+
 def write_outputs(rows, out_prefix):
     import csv
     columns = ["date_local_str", "day_of_week", "account", "folder", "sender_name",
                "sender_email", "company_guess", "subject", "matched_keywords",
-               "potential_fdcpa_flag", "excerpt", "source_ref"]
+               "potential_fdcpa_flag", "excerpt", "source_ref", "screenshot_path"]
     csv_path = f"{out_prefix}.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=columns)
@@ -102,6 +151,8 @@ def write_outputs(rows, out_prefix):
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill
+        from openpyxl.drawing.image import Image as XLImage
+        from openpyxl.utils import get_column_letter
     except ImportError:
         print("openpyxl not installed (pip install openpyxl --break-system-packages) "
               "-- CSV was still written.", file=sys.stderr)
@@ -109,7 +160,10 @@ def write_outputs(rows, out_prefix):
 
     headers = ["Date/Time (Local)", "Day", "Account", "Folder", "Sender Name", "Sender Email",
                "Company (guess)", "Subject", "Matched Keyword(s)", "Potential FDCPA Flag",
-               "Excerpt", "Reference"]
+               "Excerpt", "Reference", "Email Screenshot"]
+    screenshot_col = len(headers)  # 1-indexed column number for the image column
+    screenshot_col_letter = get_column_letter(screenshot_col)
+
     wb = Workbook()
     ws_all = wb.active
     ws_all.title = "All Matches"
@@ -120,21 +174,45 @@ def write_outputs(rows, out_prefix):
         ws.append(headers)
         for cell in ws[1]:
             cell.font = bold
+        ws.column_dimensions[screenshot_col_letter].width = 46
+
+    def append_row(ws, r, vals):
+        ws.append(vals)
+        row_num = ws.max_row
+        path = r.get("screenshot_path")
+        if path and Path(path).exists():
+            try:
+                img = XLImage(path)
+                # Scale down to a fixed width so the sheet stays a manageable size.
+                target_w = 320
+                if img.width:
+                    scale = target_w / img.width
+                    img.width = target_w
+                    img.height = int(img.height * scale)
+                ws.row_dimensions[row_num].height = max(img.height * 0.75, 15)
+                ws.add_image(img, f"{screenshot_col_letter}{row_num}")
+            except Exception as e:
+                print(f"  Could not embed screenshot for row {row_num}: {e}", file=sys.stderr)
+        return row_num
 
     for r in rows:
         vals = [r["date_local_str"], r["day_of_week"], r["account"], r["folder"],
                 r["sender_name"], r["sender_email"], r["company_guess"], r["subject"],
-                r["matched_keywords"], r["potential_fdcpa_flag"], r["excerpt"], r["source_ref"]]
-        ws_all.append(vals)
+                r["matched_keywords"], r["potential_fdcpa_flag"], r["excerpt"], r["source_ref"],
+                "" if r.get("screenshot_path") else "(no screenshot)"]
+        row_num = append_row(ws_all, r, vals)
         if r["potential_fdcpa_flag"] == "Yes":
-            for cell in ws_all[ws_all.max_row]:
+            for cell in ws_all[row_num]:
                 cell.fill = fill
-            ws_flag.append(vals)
+            append_row(ws_flag, r, vals)
 
     for ws in (ws_all, ws_flag):
         for col_cells in ws.columns:
+            col_letter = col_cells[0].column_letter
+            if col_letter == screenshot_col_letter:
+                continue
             length = max((len(str(c.value)) if c.value else 0) for c in col_cells)
-            ws.column_dimensions[col_cells[0].column_letter].width = min(max(length + 2, 10), 60)
+            ws.column_dimensions[col_letter].width = min(max(length + 2, 10), 60)
 
     xlsx_path = f"{out_prefix}.xlsx"
     wb.save(xlsx_path)
@@ -147,17 +225,32 @@ def main():
                      help="One or more raw JSON files (or directories of them)")
     ap.add_argument("--out-prefix", required=True)
     ap.add_argument("--years", type=float, default=2.0)
-    ap.add_argument("--tz", default="America/New_York")
+    ap.add_argument("--tz", required=True,
+                     help="IANA timezone for the user's actual location, e.g. America/New_York, "
+                          "America/Chicago, America/Denver, America/Los_Angeles, America/Phoenix. "
+                          "Required -- don't default this to Eastern time; ask the user where "
+                          "they live and map it to the right zone (their state may span more "
+                          "than one, e.g. Texas or Indiana, so confirm the city/region if so).")
     ap.add_argument("--flag-start-hour", type=int, default=21)
     ap.add_argument("--flag-end-hour", type=int, default=8)
+    ap.add_argument("--screenshots", choices=["all", "flagged", "none"], default="all",
+                     help="Which rows get an embedded screenshot of the actual email. "
+                          "'all' (default) captures every match; 'flagged' only the "
+                          "potential-FDCPA (off-hours) rows, which is faster if you only "
+                          "need evidence for those; 'none' skips screenshots entirely.")
+    ap.add_argument("--screenshot-dir", default=None,
+                     help="Where to save screenshot PNGs before they're embedded in the xlsx. "
+                          "Defaults to '<out-prefix>_screenshots/'.")
     args = ap.parse_args()
 
     tz = ZoneInfo(args.tz)
     cutoff = datetime.now(timezone.utc) - timedelta(days=int(args.years * 365.25))
+    screenshot_dir = Path(args.screenshot_dir or f"{args.out_prefix}_screenshots")
 
     raw_records = load_records(args.input)
     seen, rows = set(), []
     dropped_old = dropped_no_match = dropped_bad_date = 0
+    screenshot_attempted = screenshot_ok = 0
 
     for r in raw_records:
         key = (r.get("account"), r.get("message_id"))
@@ -167,6 +260,7 @@ def main():
 
         subject = r.get("subject") or ""
         body = r.get("body_text") or ""
+        body_html = r.get("body_html") or ""
         matched = find_matches(subject + "\n" + body)
         if not matched:
             dropped_no_match += 1
@@ -183,10 +277,29 @@ def main():
         dt_local = dt_utc.astimezone(tz)
         hour = dt_local.hour
         is_flagged = hour >= args.flag_start_hour or hour < args.flag_end_hour
+        date_local_str = dt_local.strftime("%Y-%m-%d %I:%M %p %Z")
+
+        screenshot_path = None
+        want_shot = args.screenshots == "all" or (args.screenshots == "flagged" and is_flagged)
+        if want_shot:
+            screenshot_attempted += 1
+            screenshot_dir.mkdir(parents=True, exist_ok=True)
+            candidate_path = screenshot_dir / f"{len(rows)}.png"
+            screenshot_path = render_email_screenshot(
+                subject,
+                r.get("sender_name", ""),
+                r.get("sender_email", ""),
+                date_local_str,
+                body_html,
+                body,
+                candidate_path,
+            )
+            if screenshot_path:
+                screenshot_ok += 1
 
         rows.append({
             "date_local": dt_local,
-            "date_local_str": dt_local.strftime("%Y-%m-%d %I:%M %p %Z"),
+            "date_local_str": date_local_str,
             "day_of_week": dt_local.strftime("%A"),
             "account": r.get("account", ""),
             "folder": r.get("folder", ""),
@@ -198,6 +311,7 @@ def main():
             "potential_fdcpa_flag": "Yes" if is_flagged else "No",
             "excerpt": (body[:300] + "...") if len(body) > 300 else body,
             "source_ref": r.get("source_ref", ""),
+            "screenshot_path": str(screenshot_path) if screenshot_path else "",
         })
 
     rows.sort(key=lambda x: x["date_local"], reverse=True)
@@ -209,6 +323,8 @@ def main():
     print(f"  Final matches: {len(rows)}", file=sys.stderr)
     print(f"  Potential FDCPA (off-hours) matches: "
           f"{sum(1 for r in rows if r['potential_fdcpa_flag'] == 'Yes')}", file=sys.stderr)
+    if args.screenshots != "none":
+        print(f"  Screenshots captured: {screenshot_ok}/{screenshot_attempted}", file=sys.stderr)
 
     write_outputs(rows, args.out_prefix)
 
