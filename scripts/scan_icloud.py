@@ -42,6 +42,28 @@ def get_plain_text(msg):
         return ""
 
 
+def get_html_body(msg):
+    """Return the raw (unstripped) text/html part, if the message has one -- used to render
+    an accurate screenshot of the email later. Returns "" if there's no HTML part."""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/html" and "attachment" not in str(part.get("Content-Disposition") or ""):
+                try:
+                    return part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", errors="replace")
+                except Exception:
+                    continue
+        return ""
+    if msg.get_content_type() == "text/html":
+        try:
+            payload = msg.get_payload(decode=True)
+            if payload is None:
+                return msg.get_payload() or ""
+            return payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
+        except Exception:
+            return ""
+    return ""
+
+
 def find_junk_mailboxes(imap):
     typ, mailboxes = imap.list()
     found = []
@@ -92,6 +114,7 @@ def main():
             matched = find_matches(subject + "\n" + body)
             if not matched:
                 continue
+            body_html = get_html_body(msg)[:100000]
             sender_name, sender_email = parseaddr(decode_mime_words(msg.get("From", "")))
             records.append({
                 "account": "icloud",
@@ -103,6 +126,7 @@ def main():
                 "subject": subject,
                 "date_raw": msg.get("Date", ""),
                 "body_text": body,
+                "body_html": body_html,
                 "source_ref": f"iCloud/{box}/UID{uid.decode()}",
             })
     imap.logout()
