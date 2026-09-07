@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# Scan outputs / scratch data (never commit real scan results or credentials)
+*.csv
+*.xlsx
+gmail_raw.json
+icloud_raw.json
+*_raw.json
+*_screenshots/
+*.png
+
+# Editors / OS
+.DS_Store
+.vscode/
