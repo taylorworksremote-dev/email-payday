@@ -1,9 +1,9 @@
 ---
-name: fdcpa-inbox-scan
+name: email-payday-scan
 description: Scans Gmail and/or iCloud Mail (Inbox and Spam/Junk) for debt-collection and payment-demand language, restricts results to the last 2 years (or since the last run, in scheduled mode), and reports only the matching emails received outside 8am-9pm in the user's own local time as potential FDCPA time-of-day violations, each with an embedded screenshot, stored in a dated Google Sheet. Supports a lightweight incremental mode for recurring/scheduled runs. Trigger this whenever the user asks to scan, search, or audit their email for debt collector or collection agency messages, late-payment/payment-reminder emails, FDCPA or FCCPA violations, creditor harassment, or evidence of off-hours collection contact -- even if they don't say "FDCPA" by name.
 ---
 
-# FDCPA Inbox Scan
+# Email Payday Scan
 
 ## What this produces
 
@@ -84,7 +84,7 @@ This script already captures both the plaintext and raw HTML body of each match 
 
 ## Step 4: Build the report file
 
-`python scripts/classify_and_report.py --input gmail_raw.json icloud_raw.json --out-prefix fdcpa_scan --tz <the IANA timezone from Step 0>` (pass whichever raw files actually exist — one or both; `--tz` is required, not optional — see Step 0). This applies the 2-year safety-net cutoff, converts every timestamp to the user's actual local timezone, keeps only messages that arrived outside 8am-9pm local (everything else is silently dropped — see "What this produces"), guesses a company name from the sender's domain, renders a screenshot of each remaining match (using the real HTML body when available, or a formatted view of the plain text otherwise) via headless Chromium, and writes `fdcpa_scan.csv` and `fdcpa_scan.xlsx` to the scratch folder. The XLSX has a single "Potential FDCPA Claims" sheet — since every row that survives the filter is already a potential violation, there's no separate "all matches" tab — with columns for the local date (`MM/DD/YYYY`, no day-of-week) and local time as two separate columns, the real account address, and the embedded screenshot. This is why it's built locally first rather than assembled directly in Sheets.
+`python scripts/classify_and_report.py --input gmail_raw.json icloud_raw.json --out-prefix payday_scan --tz <the IANA timezone from Step 0>` (pass whichever raw files actually exist — one or both; `--tz` is required, not optional — see Step 0). This applies the 2-year safety-net cutoff, converts every timestamp to the user's actual local timezone, keeps only messages that arrived outside 8am-9pm local (everything else is silently dropped — see "What this produces"), guesses a company name from the sender's domain, renders a screenshot of each remaining match (using the real HTML body when available, or a formatted view of the plain text otherwise) via headless Chromium, and writes `payday_scan.csv` and `payday_scan.xlsx` to the scratch folder. The XLSX has a single "Potential FDCPA Claims" sheet — since every row that survives the filter is already a potential violation, there's no separate "all matches" tab — with columns for the local date (`MM/DD/YYYY`, no day-of-week) and local time as two separate columns, the real account address, and the embedded screenshot. This is why it's built locally first rather than assembled directly in Sheets.
 
 By default every row that makes it into the report gets a screenshot (`--screenshots all`); `--screenshots none` skips screenshots entirely (faster if the user just wants the data). There's no `flagged`-only mode anymore since every output row is already a flagged (off-hours) hit. If `openpyxl` isn't installed, install it first (`pip install openpyxl --break-system-packages`) so the XLSX actually gets built; if Playwright/Chromium isn't installed, screenshots are silently skipped and everything else still works — install it (see Requirements) if the user wants the visual evidence.
 
@@ -92,8 +92,8 @@ If this step reports zero rows, that means nothing matched the keywords outside 
 
 ## Step 5: Store it in a Google Sheet
 
-The deliverable is a Google Sheet, not a downloaded file. Read `fdcpa_scan.xlsx` and base64-encode its bytes, then call `mcp__Google_Drive__create_file` with:
-- `title`: `FDCPA Inbox Scan - <today's date>` for a one-off manual run, or `FDCPA Inbox Scan - Gmail - <today's date>` for a scheduled/incremental run (spelling out the scope makes it obvious at a glance that it's a partial-window scan, not the full history) — always give each run its own dated title rather than reusing one, since a plain file-create call can only create new files, not append rows to or overwrite an existing sheet's content. A single ever-growing master sheet across runs isn't possible with a create-only Drive tool; if the user wants a combined view later, that's a manual step of comparing the dated sheets, not something this skill automates.
+The deliverable is a Google Sheet, not a downloaded file. Read `payday_scan.xlsx` and base64-encode its bytes, then call `mcp__Google_Drive__create_file` with:
+- `title`: `Email Payday Scan - <today's date>` for a one-off manual run, or `Email Payday Scan - Gmail - <today's date>` for a scheduled/incremental run (spelling out the scope makes it obvious at a glance that it's a partial-window scan, not the full history) — always give each run its own dated title rather than reusing one, since a plain file-create call can only create new files, not append rows to or overwrite an existing sheet's content. A single ever-growing master sheet across runs isn't possible with a create-only Drive tool; if the user wants a combined view later, that's a manual step of comparing the dated sheets, not something this skill automates.
 - `base64Content`: the base64-encoded xlsx bytes
 - `contentMimeType`: `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
 - leave `disableConversionToGoogleType` unset (false) so Drive converts the upload into a native Google Sheet — this is what preserves the embedded screenshots, rather than dropping into a flat CSV import
@@ -103,7 +103,7 @@ Embedded screenshots make the xlsx meaningfully larger than a text-only report. 
 
 The response carries the new file's id and link. Share that link with the user directly — don't just say a sheet was created without handing over how to open it. On a scheduled run with no one watching in real time, still record the link (see Step 6) so it's there when the user checks back.
 
-If no Google Drive connector is available in the current session, don't silently substitute something else: tell the user Drive isn't reachable right now, and deliver the local `fdcpa_scan.csv`/`fdcpa_scan.xlsx` files instead so the work isn't lost.
+If no Google Drive connector is available in the current session, don't silently substitute something else: tell the user Drive isn't reachable right now, and deliver the local `payday_scan.csv`/`payday_scan.xlsx` files instead so the work isn't lost.
 
 ## Step 6: Summarize
 
